@@ -104,6 +104,7 @@ class StrategyRouter:
     """
 
     def __init__(self, config: BudgeteerConfig) -> None:
+        """Initialize with model tiers sorted by cost."""
         self._config = config
         self._tiers_by_cost: list[ModelTier] = sorted(
             config.model_tiers,

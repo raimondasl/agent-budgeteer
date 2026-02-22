@@ -10,6 +10,25 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = []
+authors = [
+    { name = "Raimondas L" },
+]
+keywords = ["agent", "budget", "llm", "cost-control", "ai"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries",
+]
+
+[project.urls]
+Homepage = "https://github.com/raimondasl/agent-budgeteer"
+Repository = "https://github.com/raimondasl/agent-budgeteer"
+Issues = "https://github.com/raimondasl/agent-budgeteer/issues"
 
 [project.optional-dependencies]
 yaml = ["pyyaml>=6.0"]
