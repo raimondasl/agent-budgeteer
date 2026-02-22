@@ -1,5 +1,6 @@
 """Agent Budgeteer — control your agent's cost, latency, and tokens."""
 
+from budgeteer.calibrator import Calibrator, CorrectionFactors, PredictionError
 from budgeteer.config import BudgeteerConfig
 from budgeteer.context_manager import ContextManager, RetrievalResult
 from budgeteer.exceptions import BudgetExceededError
@@ -19,6 +20,7 @@ from budgeteer.models import (
     ToolResult,
 )
 from budgeteer.policy import PolicyEngine
+from budgeteer.reporting import Reporter
 from budgeteer.roi import ClarifyingQuestion, ROIEvaluator, ROIResult, ROISignals
 from budgeteer.router import CandidateStrategy, StrategyRouter
 from budgeteer.sdk import Budgeteer
@@ -31,6 +33,8 @@ __all__ = [
     "Budgeteer",
     "BudgeteerConfig",
     "BudgetAccount",
+    "Calibrator",
+    "CorrectionFactors",
     "BudgetExceededError",
     "BudgetScope",
     "CandidateStrategy",
@@ -40,6 +44,8 @@ __all__ = [
     "LLMResponse",
     "ModelTier",
     "PolicyEngine",
+    "PredictionError",
+    "Reporter",
     "RetrievalResult",
     "ROIEvaluator",
     "ROIResult",
