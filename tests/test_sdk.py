@@ -11,7 +11,9 @@ from budgeteer.models import (
     StepContext,
     StepMetrics,
 )
+from budgeteer.policy import PolicyEngine
 from budgeteer.sdk import Budgeteer
+from budgeteer.telemetry import TelemetryStore
 
 
 class TestSDKLifecycle:
@@ -258,4 +260,46 @@ class TestSDKGracefulDegradation:
             sdk.before_step(ctx3)
 
         sdk.end_run(run.run_id)
+        sdk.close()
+
+
+class TestSDKProperties:
+    def test_config_property(self, config):
+        sdk = Budgeteer(config)
+        assert isinstance(sdk.config, BudgeteerConfig)
+        assert sdk.config is config
+        sdk.close()
+
+    def test_policy_property(self, config):
+        sdk = Budgeteer(config)
+        assert isinstance(sdk.policy, PolicyEngine)
+        sdk.close()
+
+    def test_telemetry_property(self, config):
+        sdk = Budgeteer(config)
+        assert isinstance(sdk.telemetry, TelemetryStore)
+        sdk.close()
+
+
+class TestSDKEdgeCases:
+    def test_end_run_unknown_id_raises(self, config):
+        sdk = Budgeteer(config)
+        with pytest.raises(ValueError, match="No active run"):
+            sdk.end_run("nonexistent-id")
+        sdk.close()
+
+    def test_after_step_unknown_run_no_crash(self, config):
+        sdk = Budgeteer(config)
+        ctx = StepContext(run_id="unknown-run")
+        decision = sdk.before_step(ctx)
+        metrics = StepMetrics(prompt_tokens=10, completion_tokens=5, cost_usd=0.001)
+        # Should not raise even though run_id isn't tracked
+        sdk.after_step(ctx, decision, metrics)
+        sdk.close()
+
+    def test_start_run_with_custom_id(self, config):
+        sdk = Budgeteer(config)
+        run = sdk.start_run(run_id="my-custom-id")
+        assert run.run_id == "my-custom-id"
+        sdk.end_run("my-custom-id")
         sdk.close()

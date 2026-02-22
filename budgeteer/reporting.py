@@ -123,6 +123,7 @@ class Reporter:
     """
 
     def __init__(self, telemetry: TelemetryStore) -> None:
+        """Initialize with a telemetry store for data access."""
         self._telemetry = telemetry
 
     def run_summary(self, run_id: str) -> RunSummary | None:

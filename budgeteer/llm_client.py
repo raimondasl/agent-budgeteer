@@ -38,6 +38,7 @@ class LLMClient:
     """
 
     def __init__(self, call_fn: Callable[..., dict[str, Any]]):
+        """Wrap a callable LLM function for metric tracking."""
         self._call_fn = call_fn
         self._call_count: int = 0
         self._total_prompt_tokens: int = 0
@@ -81,12 +82,15 @@ class LLMClient:
 
     @property
     def call_count(self) -> int:
+        """Number of completed LLM calls."""
         return self._call_count
 
     @property
     def total_prompt_tokens(self) -> int:
+        """Cumulative prompt tokens across all calls."""
         return self._total_prompt_tokens
 
     @property
     def total_completion_tokens(self) -> int:
+        """Cumulative completion tokens across all calls."""
         return self._total_completion_tokens

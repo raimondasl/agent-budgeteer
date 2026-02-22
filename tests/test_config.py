@@ -95,3 +95,20 @@ class TestBudgeteerConfig:
         monkeypatch.setattr(builtins, "__import__", mock_import)
         with pytest.raises(ImportError, match="pyyaml is required"):
             BudgeteerConfig.from_file(path)
+
+
+class TestConfigEdgeCases:
+    def test_from_file_nonexistent_raises(self):
+        with pytest.raises(FileNotFoundError):
+            BudgeteerConfig.from_file("/nonexistent/path/config.json")
+
+    def test_from_dict_with_extra_keys_raises(self):
+        with pytest.raises(TypeError):
+            BudgeteerConfig.from_dict({"not_a_real_field": 123})
+
+    def test_from_dict_empty(self):
+        cfg = BudgeteerConfig.from_dict({})
+        assert cfg.default_model == "gpt-4o-mini"
+        assert cfg.default_max_tokens == 1024
+        assert cfg.model_tiers == []
+        assert cfg.default_run_budget is None

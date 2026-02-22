@@ -117,3 +117,23 @@ class TestTelemetryToolCallPersistence:
         calls = telemetry.get_tool_calls("r1", step_id="s1")
         assert len(calls) == 1
         assert calls[0].tool_name == "a"
+
+
+class TestTelemetryEdgeCases:
+    def test_get_steps_nonexistent_run(self, telemetry):
+        assert telemetry.get_steps("nonexistent") == []
+
+    def test_get_tool_calls_nonexistent_run(self, telemetry):
+        assert telemetry.get_tool_calls("nonexistent") == []
+
+    def test_get_run_nonexistent(self, telemetry):
+        assert telemetry.get_run("nonexistent") is None
+
+    def test_get_run_summary_with_no_steps_or_tools(self, telemetry):
+        run = RunRecord(run_id="empty-run")
+        telemetry.log_run(run)
+        summary = telemetry.get_run_summary("empty-run")
+        assert summary is not None
+        assert summary["logged_steps"] == 0
+        assert summary["logged_tool_calls"] == 0
+        assert summary["run_id"] == "empty-run"
