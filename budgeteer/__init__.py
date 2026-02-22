@@ -1,6 +1,7 @@
 """Agent Budgeteer — control your agent's cost, latency, and tokens."""
 
 from budgeteer.config import BudgeteerConfig
+from budgeteer.context_manager import ContextManager, RetrievalResult
 from budgeteer.exceptions import BudgetExceededError
 from budgeteer.llm_client import LLMClient
 from budgeteer.models import (
@@ -32,10 +33,12 @@ __all__ = [
     "BudgetExceededError",
     "BudgetScope",
     "CandidateStrategy",
+    "ContextManager",
     "LLMClient",
     "LLMResponse",
     "ModelTier",
     "PolicyEngine",
+    "RetrievalResult",
     "RunBudget",
     "RunRecord",
     "StepContext",
