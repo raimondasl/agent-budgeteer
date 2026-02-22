@@ -19,6 +19,7 @@ from budgeteer.models import (
     ToolResult,
 )
 from budgeteer.policy import PolicyEngine
+from budgeteer.roi import ClarifyingQuestion, ROIEvaluator, ROIResult, ROISignals
 from budgeteer.router import CandidateStrategy, StrategyRouter
 from budgeteer.sdk import Budgeteer
 from budgeteer.telemetry import TelemetryStore
@@ -33,12 +34,16 @@ __all__ = [
     "BudgetExceededError",
     "BudgetScope",
     "CandidateStrategy",
+    "ClarifyingQuestion",
     "ContextManager",
     "LLMClient",
     "LLMResponse",
     "ModelTier",
     "PolicyEngine",
     "RetrievalResult",
+    "ROIEvaluator",
+    "ROIResult",
+    "ROISignals",
     "RunBudget",
     "RunRecord",
     "StepContext",
