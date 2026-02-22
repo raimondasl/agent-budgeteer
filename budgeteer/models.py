@@ -40,6 +40,7 @@ class RunBudget:
     hard_usd_cap: float | None = None
     hard_token_cap: int | None = None
     hard_latency_cap_ms: float | None = None
+    max_tool_calls: int | None = None
 
 
 @dataclass
