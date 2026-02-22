@@ -32,3 +32,27 @@ class BudgetExceededError(Exception):
             parts.append(f"(scope={scope_id})")
         parts.append(f"— limit={limit}, current={current}")
         super().__init__(" ".join(parts))
+
+
+class RetryExhaustedError(Exception):
+    """Raised when all retries and fallback attempts are exhausted.
+
+    Attributes:
+        attempts: Number of attempts made.
+        last_error: The last exception that caused the failure.
+        models_tried: List of model names attempted.
+    """
+
+    def __init__(
+        self,
+        attempts: int,
+        last_error: Exception,
+        models_tried: list[str] | None = None,
+    ):
+        self.attempts = attempts
+        self.last_error = last_error
+        self.models_tried = models_tried or []
+        models_str = ", ".join(self.models_tried) if self.models_tried else "unknown"
+        super().__init__(
+            f"All {attempts} attempts exhausted (models tried: {models_str}): {last_error}"
+        )

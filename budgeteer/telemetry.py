@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from dataclasses import asdict
 from pathlib import Path
 
@@ -85,8 +86,9 @@ class TelemetryStore:
 
     def __init__(self, db_path: str | Path = "budgeteer_telemetry.db"):
         self._db_path = str(db_path)
-        self._conn = sqlite3.connect(self._db_path)
+        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._lock = threading.Lock()
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
 
@@ -98,44 +100,46 @@ class TelemetryStore:
 
     def log_run(self, record: RunRecord) -> None:
         """Insert a new run record."""
-        self._conn.execute(
-            """INSERT INTO runs
-               (run_id, start_time, end_time, total_cost_usd, total_tokens,
-                total_latency_ms, total_steps, total_tool_calls, success)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                record.run_id,
-                record.start_time,
-                record.end_time,
-                record.total_cost_usd,
-                record.total_tokens,
-                record.total_latency_ms,
-                record.total_steps,
-                record.total_tool_calls,
-                _bool_to_int(record.success),
-            ),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO runs
+                   (run_id, start_time, end_time, total_cost_usd, total_tokens,
+                    total_latency_ms, total_steps, total_tool_calls, success)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    record.run_id,
+                    record.start_time,
+                    record.end_time,
+                    record.total_cost_usd,
+                    record.total_tokens,
+                    record.total_latency_ms,
+                    record.total_steps,
+                    record.total_tool_calls,
+                    _bool_to_int(record.success),
+                ),
+            )
+            self._conn.commit()
 
     def update_run(self, record: RunRecord) -> None:
         """Update an existing run record."""
-        self._conn.execute(
-            """UPDATE runs SET
-               end_time=?, total_cost_usd=?, total_tokens=?,
-               total_latency_ms=?, total_steps=?, total_tool_calls=?, success=?
-               WHERE run_id=?""",
-            (
-                record.end_time,
-                record.total_cost_usd,
-                record.total_tokens,
-                record.total_latency_ms,
-                record.total_steps,
-                record.total_tool_calls,
-                _bool_to_int(record.success),
-                record.run_id,
-            ),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """UPDATE runs SET
+                   end_time=?, total_cost_usd=?, total_tokens=?,
+                   total_latency_ms=?, total_steps=?, total_tool_calls=?, success=?
+                   WHERE run_id=?""",
+                (
+                    record.end_time,
+                    record.total_cost_usd,
+                    record.total_tokens,
+                    record.total_latency_ms,
+                    record.total_steps,
+                    record.total_tool_calls,
+                    _bool_to_int(record.success),
+                    record.run_id,
+                ),
+            )
+            self._conn.commit()
 
     def get_run(self, run_id: str) -> RunRecord | None:
         """Retrieve a run record by ID."""
@@ -160,20 +164,21 @@ class TelemetryStore:
 
     def log_step(self, record: StepRecord) -> None:
         """Insert a step record."""
-        self._conn.execute(
-            """INSERT INTO steps
-               (run_id, step_id, decision_json, predicted_json, actual_json, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (
-                record.run_id,
-                record.step_id,
-                json.dumps(asdict(record.decision)),
-                json.dumps(asdict(record.predicted)) if record.predicted else None,
-                json.dumps(asdict(record.actual)) if record.actual else None,
-                record.timestamp,
-            ),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO steps
+                   (run_id, step_id, decision_json, predicted_json, actual_json, timestamp)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    record.run_id,
+                    record.step_id,
+                    json.dumps(asdict(record.decision)),
+                    json.dumps(asdict(record.predicted)) if record.predicted else None,
+                    json.dumps(asdict(record.actual)) if record.actual else None,
+                    record.timestamp,
+                ),
+            )
+            self._conn.commit()
 
     def get_steps(self, run_id: str) -> list[StepRecord]:
         """Retrieve all step records for a run."""
@@ -201,22 +206,23 @@ class TelemetryStore:
 
     def log_tool_call(self, record: ToolRecord) -> None:
         """Insert a tool call record."""
-        self._conn.execute(
-            """INSERT INTO tool_calls
-               (run_id, step_id, tool_name, duration_ms, tokens_used, success, error, timestamp)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                record.run_id,
-                record.step_id,
-                record.tool_name,
-                record.duration_ms,
-                record.tokens_used,
-                _bool_to_int(record.success),
-                record.error,
-                record.timestamp,
-            ),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO tool_calls
+                   (run_id, step_id, tool_name, duration_ms, tokens_used, success, error, timestamp)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    record.run_id,
+                    record.step_id,
+                    record.tool_name,
+                    record.duration_ms,
+                    record.tokens_used,
+                    _bool_to_int(record.success),
+                    record.error,
+                    record.timestamp,
+                ),
+            )
+            self._conn.commit()
 
     def get_tool_calls(self, run_id: str, step_id: str | None = None) -> list[ToolRecord]:
         """Retrieve tool call records, optionally filtered by step."""
@@ -263,17 +269,18 @@ class TelemetryStore:
             from datetime import datetime, timezone
 
             date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        self._conn.execute(
-            """INSERT INTO budget_ledger (scope, scope_id, date, total_cost_usd, total_tokens, total_runs)
-               VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(scope, scope_id, date)
-               DO UPDATE SET
-                   total_cost_usd = total_cost_usd + excluded.total_cost_usd,
-                   total_tokens = total_tokens + excluded.total_tokens,
-                   total_runs = total_runs + excluded.total_runs""",
-            (scope, scope_id, date, cost_usd, tokens, runs),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO budget_ledger (scope, scope_id, date, total_cost_usd, total_tokens, total_runs)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(scope, scope_id, date)
+                   DO UPDATE SET
+                       total_cost_usd = total_cost_usd + excluded.total_cost_usd,
+                       total_tokens = total_tokens + excluded.total_tokens,
+                       total_runs = total_runs + excluded.total_runs""",
+                (scope, scope_id, date, cost_usd, tokens, runs),
+            )
+            self._conn.commit()
 
     def get_daily_usage(
         self, scope: str, scope_id: str, date: str | None = None
@@ -300,6 +307,13 @@ class TelemetryStore:
             "runs": row["total_runs"],
         }
 
+    def list_run_ids(self) -> list[str]:
+        """Return all run IDs in the store, ordered by start_time."""
+        rows = self._conn.execute(
+            "SELECT run_id FROM runs ORDER BY start_time"
+        ).fetchall()
+        return [row["run_id"] for row in rows]
+
     def get_run_summary(self, run_id: str) -> dict | None:
         """Get a summary of a run including step and tool call counts."""
         run = self.get_run(run_id)
@@ -324,3 +338,55 @@ class TelemetryStore:
             "logged_steps": step_count,
             "logged_tool_calls": tool_count,
         }
+
+    def export_json(self, run_ids: list[str] | None = None) -> str:
+        """Export run data as a JSON string.
+
+        Args:
+            run_ids: Run IDs to export. If None, exports all runs.
+
+        Returns a JSON string containing runs, steps, and tool calls.
+        """
+        if run_ids is None:
+            run_ids = self.list_run_ids()
+
+        data: list[dict] = []
+        for run_id in run_ids:
+            run = self.get_run(run_id)
+            if run is None:
+                continue
+            steps = self.get_steps(run_id)
+            tools = self.get_tool_calls(run_id)
+            data.append({
+                "run_id": run.run_id,
+                "start_time": run.start_time,
+                "end_time": run.end_time,
+                "total_cost_usd": run.total_cost_usd,
+                "total_tokens": run.total_tokens,
+                "total_latency_ms": run.total_latency_ms,
+                "total_steps": run.total_steps,
+                "total_tool_calls": run.total_tool_calls,
+                "success": run.success,
+                "steps": [
+                    {
+                        "step_id": s.step_id,
+                        "decision": asdict(s.decision),
+                        "predicted": asdict(s.predicted) if s.predicted else None,
+                        "actual": asdict(s.actual) if s.actual else None,
+                        "timestamp": s.timestamp,
+                    }
+                    for s in steps
+                ],
+                "tool_calls": [
+                    {
+                        "tool_name": t.tool_name,
+                        "duration_ms": t.duration_ms,
+                        "tokens_used": t.tokens_used,
+                        "success": t.success,
+                        "error": t.error,
+                        "timestamp": t.timestamp,
+                    }
+                    for t in tools
+                ],
+            })
+        return json.dumps(data, indent=2)

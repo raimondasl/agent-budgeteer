@@ -150,7 +150,28 @@ class LLMResponse:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     latency_ms: float = 0.0
+    cost_usd: float = 0.0
     raw_response: Any = None
+
+
+def compute_cost(
+    model: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    model_tiers: list[ModelTier],
+) -> float:
+    """Compute cost in USD for a given model and token counts.
+
+    Looks up the model in *model_tiers* and multiplies by per-token rates.
+    Returns 0.0 if the model is not found.
+    """
+    for tier in model_tiers:
+        if tier.name == model:
+            return (
+                prompt_tokens * tier.cost_per_prompt_token
+                + completion_tokens * tier.cost_per_completion_token
+            )
+    return 0.0
 
 
 @dataclass
@@ -163,3 +184,16 @@ class ToolResult:
     error: str | None = None
     duration_ms: float = 0.0
     tokens_used: int = 0
+
+
+@dataclass
+class StepResult:
+    """Result of an orchestrated step execution."""
+
+    decision: StepDecision
+    llm_response: LLMResponse
+    tool_results: list[ToolResult] = field(default_factory=list)
+    metrics: StepMetrics = field(default_factory=StepMetrics)
+    context_was_truncated: bool = False
+    roi_decisions: dict[str, Any] | None = None
+    suggested_question: Any | None = None  # ClarifyingQuestion when available

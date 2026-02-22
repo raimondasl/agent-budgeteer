@@ -11,11 +11,16 @@ Otherwise falls back to the simple two-level degradation logic.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from budgeteer.config import BudgeteerConfig
 from budgeteer.exceptions import BudgetExceededError
-from budgeteer.models import StepContext, StepDecision
+from budgeteer.models import StepContext, StepDecision, StepMetrics
 from budgeteer.router import StrategyRouter
 from budgeteer.telemetry import TelemetryStore
+
+if TYPE_CHECKING:
+    from budgeteer.calibrator import Calibrator
 
 # Degradation thresholds (fraction of budget consumed) — legacy path
 _DEGRADE_LEVEL_1 = 0.8  # reduce max_tokens, fewer tool calls
@@ -35,10 +40,16 @@ class PolicyEngine:
     threshold-based degradation.
     """
 
-    def __init__(self, config: BudgeteerConfig, telemetry: TelemetryStore):
+    def __init__(self, config: BudgeteerConfig, telemetry: TelemetryStore, calibrator: "Calibrator | None" = None):
         self._config = config
         self._telemetry = telemetry
-        self._router = StrategyRouter(config)
+        self._router = StrategyRouter(config, calibrator=calibrator)
+        self._last_prediction: StepMetrics | None = None
+
+    @property
+    def last_prediction(self) -> StepMetrics | None:
+        """The predicted metrics from the last routed evaluation, or None."""
+        return self._last_prediction
 
     def evaluate(self, context: StepContext) -> StepDecision:
         """Produce a StepDecision given the current run/budget context.
@@ -77,8 +88,10 @@ class PolicyEngine:
         )
 
         if selected is None:
+            self._last_prediction = None
             raise BudgetExceededError("no_feasible_strategy", 0, 0)
 
+        self._last_prediction = self._router.get_prediction(selected)
         decision = self._router.to_decision(selected)
 
         # Cap tool calls from run budget
@@ -202,6 +215,7 @@ class PolicyEngine:
 
     def _evaluate_legacy(self, context: StepContext) -> StepDecision:
         """Simple two-level degradation without strategy routing."""
+        self._last_prediction = None
         decision = StepDecision(
             model=self._config.default_model,
             max_tokens=self._config.default_max_tokens,
