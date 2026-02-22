@@ -1,0 +1,419 @@
+1) Product definition
+Goal
+
+Ensure an agent meets user success targets while staying within:
+
+Cost budgets (per run / per user / per day)
+
+Token budgets (prompt + completion, tool tokens, retrieval tokens)
+
+Latency budgets (p95 per step, end-to-end SLA)
+
+Non-goals (initially)
+
+Perfect optimal control (we’ll start with heuristics + calibration)
+
+Model-provider specific features beyond “call model / get usage”
+
+Fully autonomous learning in production without guardrails
+
+Target environments
+
+Chat agents (interactive)
+
+Batch jobs (offline)
+
+Multi-tool agents (retrieval, code exec, web, DB)
+
+2) Core user stories (what must work)
+
+Budget enforcement
+
+“This user gets $X/day, this run gets $Y, this org gets $Z.”
+
+If budget is near exhaustion, the system degrades gracefully instead of failing abruptly.
+
+Dynamic routing
+
+For each step: choose model, max_tokens, temperature, context size, and tool strategy.
+
+Budget-aware planning
+
+Before doing 5 tool calls, the agent learns to:
+
+ask one decisive clarifying question
+
+skip retrieval if low ROI
+
+prefer cheaper tool/model combos for similar expected outcomes
+
+Telemetry + outcomes
+
+Track: tokens, cost, latency, tool calls, failures, user satisfaction proxy / task success labels.
+
+Show: “we saved 38% cost at same success rate” style reporting.
+
+3) High-level architecture
+Components
+
+Policy Engine
+
+Inputs: user/org/run context, current spend, predicted spend, SLA constraints, task type.
+
+Output: “control actions” (model choice, max tokens, tool call limits, compression levels).
+
+Forecaster
+
+Predict tokens/cost/latency for candidate strategies before executing.
+
+Calibrates predictions using observed usage.
+
+Planner Controller
+
+Inserts a “budget-aware plan step” that can:
+
+ask 1 clarifying question
+
+choose a cheaper plan variant
+
+limit tool calls / retrieval depth
+
+Context Manager
+
+Truncation policies
+
+Summarization/memory compression policies
+
+Retrieval result packing (top-k, snippet sizing)
+
+Tool ROI Evaluator
+
+Decides whether a tool call is worth it given remaining budget.
+
+Implements “expected value of information” (VOI) heuristics/learned scoring.
+
+Telemetry + Storage
+
+Structured events (JSON): run_id, step_id, model, tokens, cost, latency, decision reason.
+
+Optional dashboard.
+
+Deployment shapes
+
+Library mode (fastest MVP): wraps LLM calls and tool calls inside your code.
+
+Sidecar service: a local/cluster service that receives “step request → returns policy decision”.
+
+4) Data model (minimal but sufficient)
+Budget entities
+
+BudgetAccount: {scope: user|org|project, limit_usd_per_day, limit_tokens_per_day, limit_runs_per_day}
+
+RunBudget: {run_id, hard_usd_cap, hard_token_cap, hard_latency_cap_ms}
+
+Policy: rules + fallback ladders
+
+Telemetry entities
+
+RunRecord: start/end time, total cost/tokens/latency, success label
+
+StepRecord: input features, chosen strategy, predicted vs actual metrics, outcomes
+
+ToolRecord: tool name, duration, bytes/tokens, success/failure
+
+5) The control loop (how a step is executed)
+
+At each agent step:
+
+Build candidate strategies (small set, e.g. 5–12)
+
+(model A, context 8k, retrieval off)
+
+(model B, context 32k, retrieval top-3)
+
+(model B, context 16k, retrieval top-1, ask clarifying question)
+
+(model C cheap, context 8k, strict output, no tools)
+
+Forecast per candidate
+
+expected prompt tokens, completion tokens, tool tokens
+
+expected cost
+
+expected latency
+
+rough expected success probability (initially heuristic)
+
+Apply policy constraints
+
+Remove candidates that violate hard caps
+
+If none remain: pick best “degrade ladder” option
+
+Choose
+
+Pick candidate with best expected utility under budgets
+
+Execute
+
+Make model call and tool calls within imposed limits
+
+Observe + log
+
+Actual usage metrics
+
+Step outcome (tool success, parsing success, user acceptance, etc.)
+
+Update calibrations
+
+6) Algorithms (pragmatic first, learn later)
+A) Token + cost prediction (MVP)
+
+Start with a deterministic estimator:
+
+prompt_tokens ≈ tokenize_len(messages + tools + retrieved_snippets)
+
+completion_tokens ≈ min(max_tokens, heuristic(task_type))
+
+Then calibrate with:
+
+Per-model correction factors (moving average error)
+
+Per-task-type completion distributions
+
+B) Latency prediction (MVP)
+
+Maintain rolling p50/p95 per:
+
+model
+
+tool
+
+context size bucket
+
+Forecast: E2E latency ≈ model_latency + sum(tool_latencies) + overhead
+
+C) Value-of-information / ROI (MVP heuristic)
+
+Score a tool call like retrieval:
+
+Benefit signals
+
+user question ambiguity high?
+
+answer requires fresh facts?
+
+previous attempts failed?
+
+Cost signals
+
+remaining budget
+
+predicted tokens/latency
+
+ROI = benefit_score / (predicted_cost + λ * predicted_latency)
+
+D) Budget-aware “one decisive question”
+
+If ambiguity high and ROI of asking is high:
+
+Ask a single targeted question chosen from a template library:
+
+“What output format do you need (JSON/table/text)?”
+
+“Is accuracy or speed more important?”
+
+“Do you want me to use web/retrieval or only provided data?”
+
+7) Graceful degradation ladder (must be explicit)
+
+Define an ordered set of fallbacks. Example:
+
+Full plan: strong model + retrieval + tools
+
+Same model, reduced retrieval (top-k ↓, snippet size ↓)
+
+Smaller model, keep retrieval minimal
+
+No retrieval, rely on internal reasoning + ask clarifying question
+
+Strict summarization mode (“best effort answer, cite uncertainty, propose next step”)
+
+This ladder should be policy-configurable and logged (“why we degraded”).
+
+8) MVP scope (what to build first)
+MVP deliverables
+
+Configurable budgets
+
+YAML/JSON policies: per-user/org/run budgets, tool limits, degrade ladder
+
+Model router
+
+Choose among at least 2–3 models (or “tiers”) via an abstraction
+
+Context manager
+
+Truncation + summarization compression
+
+Tool call governor
+
+Max tool calls per run/step; block low-ROI calls when budget tight
+
+Telemetry
+
+Persistent logs + simple report: spend/tokens/latency vs success
+
+MVP success criteria
+
+Demonstrate on a small benchmark suite:
+
+Cost reduced at similar task success rate
+
+No budget violations
+
+Predictor error decreases over time (calibration works)
+
+9) Evaluation plan (how you’ll prove it works)
+Metrics
+
+Budget compliance: % runs within caps
+
+Efficiency: cost/run, tokens/run, tool calls/run
+
+Latency: p50/p95 end-to-end
+
+Quality:
+
+task success (binary/graded)
+
+structured output validity (JSON parse rate)
+
+user satisfaction proxy (thumbs up/down, “follow-up needed” rate)
+
+Bench harness
+
+Create a replayable suite:
+
+20–50 representative tasks (your domain)
+
+deterministic tool stubs or cached retrieval results for repeatability
+
+Run A/B:
+
+baseline agent
+
+agent + Budgeteer (different policies)
+
+10) Implementation breakdown (milestone sequence)
+Milestone 1 — Skeleton + Interfaces
+
+Define a Budgeteer SDK API:
+
+before_step(context) -> decision
+
+after_step(observed_metrics) -> update
+
+Implement providers:
+
+LLMClient wrapper capturing usage
+
+ToolExecutor wrapper capturing duration/results
+
+Basic logging to file/DB.
+
+Milestone 2 — Policy Engine + Hard Caps
+
+Budget accounting:
+
+per-run caps
+
+per-user per-day caps (simple KV store)
+
+Enforce:
+
+max tool calls
+
+max tokens
+
+max latency (stop early + respond with partial)
+
+Milestone 3 — Strategy Router + Degradation Ladder
+
+Candidate generation
+
+Pick strategy under constraints
+
+Implement “degrade ladder” rules
+
+Milestone 4 — Context Manager v1
+
+Truncation rules
+
+Summarize older messages (cheap model) when context must shrink
+
+Retrieval packing logic (if retrieval exists)
+
+Milestone 5 — ROI Heuristics + Clarifying Question Mode
+
+Implement VOI heuristics
+
+Add decisive-question selection templates
+
+Add “skip retrieval if low ROI” guard
+
+Milestone 6 — Calibration + Reporting
+
+Compare predicted vs actual
+
+Update correction factors
+
+Produce reports + dashboards (optional)
+
+11) Tech choices (sensible defaults)
+
+Language: Python (fast iteration) or TypeScript (agent ecosystem)
+
+Storage:
+
+MVP: SQLite / Postgres
+
+Later: Redis for budget counters + Postgres for telemetry
+
+Observability:
+
+OpenTelemetry events
+
+Prometheus metrics + Grafana dashboard (optional)
+
+12) Risk list + mitigations
+
+Prediction error causes bad decisions
+
+Mitigation: conservative bounds + fallback ladder; calibrate continuously
+
+Quality regressions from over-degrading
+
+Mitigation: minimum quality floor policies; task-type exemptions
+
+Tool ROI too heuristic
+
+Mitigation: start heuristic, then learn a lightweight classifier/regressor from telemetry
+
+Logging sensitive data
+
+Mitigation: redact prompts; store hashes; configurable PII filters
+
+13) “V1+” extensions (after MVP works)
+
+Learned success predictor (features → probability of success per strategy)
+
+Per-user personalization (“this user tolerates slower but accurate”)
+
+Auto-policy tuning (Bayesian optimization / bandits) with guardrails
+
+Multi-objective optimization (Pareto frontier of cost/latency/quality)
+
+SLA-aware scheduling in multi-agent systems
+
