@@ -23,6 +23,16 @@ class BudgeteerConfig:
     storage_path: str = "budgeteer_telemetry.db"
     model_tiers: list[ModelTier] = field(default_factory=list)
     default_run_budget: RunBudget | None = None
+    calibration_enabled: bool = True
+    calibration_alpha: float = 0.3
+    roi_enabled: bool = False
+    roi_lambda_latency: float = 0.001
+    roi_recommend_threshold: float = 1.0
+    roi_budget_floor: float = 0.1
+    roi_clarify_ambiguity_threshold: float = 0.6
+    max_retries: int = 0
+    retry_delay_ms: float = 1000.0
+    fallback_enabled: bool = True
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> BudgeteerConfig:

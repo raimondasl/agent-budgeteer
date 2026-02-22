@@ -14,9 +14,13 @@ This implements the control loop from the project plan (§5):
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from budgeteer.config import BudgeteerConfig
-from budgeteer.models import ModelTier, StepContext, StepDecision
+from budgeteer.models import ModelTier, StepContext, StepDecision, StepMetrics
+
+if TYPE_CHECKING:
+    from budgeteer.calibrator import Calibrator
 
 
 # ------------------------------------------------------------------
@@ -103,13 +107,18 @@ class StrategyRouter:
         decision = router.to_decision(best)
     """
 
-    def __init__(self, config: BudgeteerConfig) -> None:
+    def __init__(self, config: BudgeteerConfig, calibrator: "Calibrator | None" = None) -> None:
         """Initialize with model tiers sorted by cost."""
         self._config = config
+        self._calibrator = calibrator
         self._tiers_by_cost: list[ModelTier] = sorted(
             config.model_tiers,
             key=lambda t: t.cost_per_prompt_token + t.cost_per_completion_token,
         )
+
+    def set_calibrator(self, calibrator: "Calibrator | None") -> None:
+        """Set or replace the calibrator used for forecast correction."""
+        self._calibrator = calibrator
 
     @property
     def available(self) -> bool:
@@ -171,6 +180,9 @@ class StrategyRouter:
         Uses the model tier's pricing to calculate cost, and simple
         heuristics for prompt-token count and latency.  Completion tokens
         are conservatively estimated as ``max_tokens`` (worst case).
+
+        When a calibrator is configured, raw predictions are corrected
+        using learned per-model factors.
         """
         tier = self._get_tier(candidate.model)
         if tier is None:
@@ -179,14 +191,39 @@ class StrategyRouter:
         prompt_tokens = self._estimate_prompt_tokens(context)
         completion_tokens = candidate.max_tokens  # conservative worst-case
 
-        candidate.predicted_prompt_tokens = prompt_tokens
-        candidate.predicted_completion_tokens = completion_tokens
-        candidate.predicted_cost_usd = (
+        raw_cost = (
             prompt_tokens * tier.cost_per_prompt_token
             + completion_tokens * tier.cost_per_completion_token
         )
-        # Simple latency model: base overhead + per-token generation time
-        candidate.predicted_latency_ms = 30.0 + completion_tokens * 0.015
+        raw_latency = 30.0 + completion_tokens * 0.015
+
+        # Apply calibration corrections if available
+        if self._calibrator is not None:
+            raw_metrics = StepMetrics(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                cost_usd=raw_cost,
+                latency_ms=raw_latency,
+            )
+            corrected = self._calibrator.apply(candidate.model, raw_metrics)
+            candidate.predicted_prompt_tokens = corrected.prompt_tokens
+            candidate.predicted_completion_tokens = corrected.completion_tokens
+            candidate.predicted_cost_usd = corrected.cost_usd
+            candidate.predicted_latency_ms = corrected.latency_ms
+        else:
+            candidate.predicted_prompt_tokens = prompt_tokens
+            candidate.predicted_completion_tokens = completion_tokens
+            candidate.predicted_cost_usd = raw_cost
+            candidate.predicted_latency_ms = raw_latency
+
+    def get_prediction(self, candidate: CandidateStrategy) -> StepMetrics:
+        """Convert a candidate's forecast fields into a StepMetrics."""
+        return StepMetrics(
+            prompt_tokens=candidate.predicted_prompt_tokens,
+            completion_tokens=candidate.predicted_completion_tokens,
+            cost_usd=candidate.predicted_cost_usd,
+            latency_ms=candidate.predicted_latency_ms,
+        )
 
     # ------------------------------------------------------------------
     # 3. Selection
