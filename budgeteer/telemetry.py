@@ -55,6 +55,16 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     timestamp REAL NOT NULL,
     FOREIGN KEY (run_id) REFERENCES runs(run_id)
 );
+
+CREATE TABLE IF NOT EXISTS budget_ledger (
+    scope TEXT NOT NULL,
+    scope_id TEXT NOT NULL,
+    date TEXT NOT NULL,
+    total_cost_usd REAL DEFAULT 0,
+    total_tokens INTEGER DEFAULT 0,
+    total_runs INTEGER DEFAULT 0,
+    PRIMARY KEY (scope, scope_id, date)
+);
 """
 
 
@@ -233,6 +243,62 @@ class TelemetryStore:
             )
             for row in rows
         ]
+
+    # -- Budget ledger --
+
+    def record_daily_usage(
+        self,
+        scope: str,
+        scope_id: str,
+        cost_usd: float = 0.0,
+        tokens: int = 0,
+        runs: int = 0,
+        date: str | None = None,
+    ) -> None:
+        """Atomically increment daily usage counters for a budget scope.
+
+        If no row exists for the given date, one is created.
+        """
+        if date is None:
+            from datetime import datetime, timezone
+
+            date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        self._conn.execute(
+            """INSERT INTO budget_ledger (scope, scope_id, date, total_cost_usd, total_tokens, total_runs)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(scope, scope_id, date)
+               DO UPDATE SET
+                   total_cost_usd = total_cost_usd + excluded.total_cost_usd,
+                   total_tokens = total_tokens + excluded.total_tokens,
+                   total_runs = total_runs + excluded.total_runs""",
+            (scope, scope_id, date, cost_usd, tokens, runs),
+        )
+        self._conn.commit()
+
+    def get_daily_usage(
+        self, scope: str, scope_id: str, date: str | None = None
+    ) -> dict:
+        """Return daily usage for a budget scope.
+
+        Returns a dict with keys: cost_usd, tokens, runs.
+        If no data exists for the date, returns zeros.
+        """
+        if date is None:
+            from datetime import datetime, timezone
+
+            date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        row = self._conn.execute(
+            "SELECT total_cost_usd, total_tokens, total_runs FROM budget_ledger "
+            "WHERE scope=? AND scope_id=? AND date=?",
+            (scope, scope_id, date),
+        ).fetchone()
+        if row is None:
+            return {"cost_usd": 0.0, "tokens": 0, "runs": 0}
+        return {
+            "cost_usd": row["total_cost_usd"],
+            "tokens": row["total_tokens"],
+            "runs": row["total_runs"],
+        }
 
     def get_run_summary(self, run_id: str) -> dict | None:
         """Get a summary of a run including step and tool call counts."""
