@@ -20,7 +20,14 @@ from budgeteer.models import (
     ToolRecord,
 )
 
+_SCHEMA_VERSION = 1
+
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_versions (
+    version INTEGER PRIMARY KEY,
+    applied_at REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
     start_time REAL NOT NULL,
@@ -91,10 +98,76 @@ class TelemetryStore:
         self._lock = threading.Lock()
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+        self._record_schema_version()
 
     def close(self) -> None:
         """Close the database connection."""
         self._conn.close()
+
+    def _record_schema_version(self) -> None:
+        """Record the current schema version if not already present."""
+        import time as _time
+        row = self._conn.execute(
+            "SELECT version FROM schema_versions WHERE version=?", (_SCHEMA_VERSION,)
+        ).fetchone()
+        if row is None:
+            self._conn.execute(
+                "INSERT INTO schema_versions (version, applied_at) VALUES (?, ?)",
+                (_SCHEMA_VERSION, _time.time()),
+            )
+            self._conn.commit()
+
+    def get_schema_version(self) -> int:
+        """Return the current schema version."""
+        row = self._conn.execute(
+            "SELECT MAX(version) FROM schema_versions"
+        ).fetchone()
+        return row[0] if row[0] is not None else 0
+
+    def purge_before(self, cutoff_time: float) -> int:
+        """Delete runs (and their steps/tool_calls) older than cutoff_time.
+
+        Returns the number of runs deleted.
+        """
+        with self._lock:
+            # Find runs to delete
+            rows = self._conn.execute(
+                "SELECT run_id FROM runs WHERE start_time < ?", (cutoff_time,)
+            ).fetchall()
+            run_ids = [row["run_id"] for row in rows]
+            if not run_ids:
+                return 0
+
+            placeholders = ",".join("?" for _ in run_ids)
+            self._conn.execute(f"DELETE FROM tool_calls WHERE run_id IN ({placeholders})", run_ids)
+            self._conn.execute(f"DELETE FROM steps WHERE run_id IN ({placeholders})", run_ids)
+            self._conn.execute(f"DELETE FROM runs WHERE run_id IN ({placeholders})", run_ids)
+            self._conn.commit()
+            return len(run_ids)
+
+    def purge_run(self, run_id: str) -> None:
+        """Delete a specific run and all its associated data."""
+        with self._lock:
+            self._conn.execute("DELETE FROM tool_calls WHERE run_id=?", (run_id,))
+            self._conn.execute("DELETE FROM steps WHERE run_id=?", (run_id,))
+            self._conn.execute("DELETE FROM runs WHERE run_id=?", (run_id,))
+            self._conn.commit()
+
+    def get_stats(self) -> dict:
+        """Return row counts per table and database file size.
+
+        Returns dict with keys: runs, steps, tool_calls, budget_ledger, db_size_bytes.
+        """
+        import os
+        stats: dict = {}
+        for table in ("runs", "steps", "tool_calls", "budget_ledger"):
+            row = self._conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+            stats[table] = row[0]
+        try:
+            stats["db_size_bytes"] = os.path.getsize(self._db_path)
+        except OSError:
+            stats["db_size_bytes"] = 0
+        return stats
 
     # -- Runs --
 

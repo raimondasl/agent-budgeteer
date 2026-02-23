@@ -22,9 +22,9 @@ from budgeteer.telemetry import TelemetryStore
 if TYPE_CHECKING:
     from budgeteer.calibrator import Calibrator
 
-# Degradation thresholds (fraction of budget consumed) — legacy path
-_DEGRADE_LEVEL_1 = 0.8  # reduce max_tokens, fewer tool calls
-_DEGRADE_LEVEL_2 = 0.9  # minimal tokens, no tools
+# Default degradation thresholds (fraction of budget consumed) — legacy path
+_DEFAULT_DEGRADE_LEVEL_1 = 0.8  # reduce max_tokens, fewer tool calls
+_DEFAULT_DEGRADE_LEVEL_2 = 0.9  # minimal tokens, no tools
 
 
 class PolicyEngine:
@@ -45,6 +45,9 @@ class PolicyEngine:
         self._telemetry = telemetry
         self._router = StrategyRouter(config, calibrator=calibrator)
         self._last_prediction: StepMetrics | None = None
+        # Read configurable thresholds (legacy path)
+        self._degrade_level_1 = config.degrade_thresholds[0]
+        self._degrade_level_2 = config.degrade_thresholds[1]
 
     @property
     def last_prediction(self) -> StepMetrics | None:
@@ -401,11 +404,10 @@ class PolicyEngine:
 
         return degrade_level, reasons
 
-    @staticmethod
-    def _degradation_level(fraction: float) -> int:
+    def _degradation_level(self, fraction: float) -> int:
         """Map budget-usage fraction to a degradation level."""
-        if fraction >= _DEGRADE_LEVEL_2:
+        if fraction >= self._degrade_level_2:
             return 2
-        if fraction >= _DEGRADE_LEVEL_1:
+        if fraction >= self._degrade_level_1:
             return 1
         return 0

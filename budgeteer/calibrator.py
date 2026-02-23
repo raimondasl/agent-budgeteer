@@ -12,7 +12,9 @@ From the project plan (§6A):
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from budgeteer.models import StepMetrics, StepRecord
 
@@ -166,6 +168,53 @@ class Calibrator:
             if self.update_from_record(rec) is not None:
                 count += 1
         return count
+
+    def save(self, path: str | Path) -> None:
+        """Serialize correction factors to a JSON file."""
+        data: dict[str, dict[str, float | int]] = {}
+        for model, factors in self._factors.items():
+            data[model] = {
+                "prompt_tokens": factors.prompt_tokens,
+                "completion_tokens": factors.completion_tokens,
+                "cost_usd": factors.cost_usd,
+                "latency_ms": factors.latency_ms,
+                "sample_count": factors.sample_count,
+            }
+        Path(path).write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def load(self, path: str | Path) -> None:
+        """Load correction factors from a JSON file, merging with existing.
+
+        If the file does not exist, does nothing (first-run scenario).
+        Raises ValueError on corrupt/unparseable JSON.
+        """
+        p = Path(path)
+        if not p.exists():
+            return
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError(f"Corrupt calibration state file: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ValueError("Calibration state file must contain a JSON object")
+        for model, factors_dict in data.items():
+            self._factors[model] = CorrectionFactors(
+                prompt_tokens=float(factors_dict.get("prompt_tokens", 1.0)),
+                completion_tokens=float(factors_dict.get("completion_tokens", 1.0)),
+                cost_usd=float(factors_dict.get("cost_usd", 1.0)),
+                latency_ms=float(factors_dict.get("latency_ms", 1.0)),
+                sample_count=int(factors_dict.get("sample_count", 0)),
+            )
+
+    @classmethod
+    def from_file(cls, path: str | Path, alpha: float = 0.3) -> Calibrator:
+        """Construct a Calibrator with pre-loaded factors from a file.
+
+        If the file does not exist, returns a fresh Calibrator.
+        """
+        cal = cls(alpha=alpha)
+        cal.load(path)
+        return cal
 
     def reset(self, model: str | None = None) -> None:
         """Reset correction factors.

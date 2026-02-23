@@ -318,20 +318,20 @@ class TestDailyBudget:
 
 
 class TestDegradationLevel:
-    def test_below_80_returns_0(self):
-        assert PolicyEngine._degradation_level(0.0) == 0
-        assert PolicyEngine._degradation_level(0.5) == 0
-        assert PolicyEngine._degradation_level(0.79) == 0
+    def test_below_80_returns_0(self, engine):
+        assert engine._degradation_level(0.0) == 0
+        assert engine._degradation_level(0.5) == 0
+        assert engine._degradation_level(0.79) == 0
 
-    def test_80_to_90_returns_1(self):
-        assert PolicyEngine._degradation_level(0.80) == 1
-        assert PolicyEngine._degradation_level(0.85) == 1
-        assert PolicyEngine._degradation_level(0.899) == 1
+    def test_80_to_90_returns_1(self, engine):
+        assert engine._degradation_level(0.80) == 1
+        assert engine._degradation_level(0.85) == 1
+        assert engine._degradation_level(0.899) == 1
 
-    def test_90_plus_returns_2(self):
-        assert PolicyEngine._degradation_level(0.90) == 2
-        assert PolicyEngine._degradation_level(0.99) == 2
-        assert PolicyEngine._degradation_level(1.0) == 2
+    def test_90_plus_returns_2(self, engine):
+        assert engine._degradation_level(0.90) == 2
+        assert engine._degradation_level(0.99) == 2
+        assert engine._degradation_level(1.0) == 2
 
 
 # ---------------------------------------------------------------------------
