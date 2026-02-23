@@ -104,6 +104,8 @@ class FullReport:
     budget_compliance: BudgetComplianceReport = field(
         default_factory=BudgetComplianceReport
     )
+    per_model_accuracy: dict[str, PredictionAccuracy] | None = None
+    degradation_impact: list[dict] | None = None
 
 
 # ------------------------------------------------------------------
@@ -259,6 +261,53 @@ class Reporter:
             compliance_rate=within / total if total > 0 else 1.0,
         )
 
+    def per_model_accuracy(
+        self, step_records: list[StepRecord]
+    ) -> dict[str, PredictionAccuracy]:
+        """Compute prediction accuracy broken down by model."""
+        by_model: dict[str, list[StepRecord]] = {}
+        for rec in step_records:
+            model = rec.decision.model
+            by_model.setdefault(model, []).append(rec)
+        return {
+            model: self.prediction_accuracy(records)
+            for model, records in by_model.items()
+        }
+
+    def degradation_impact(
+        self, step_records: list[StepRecord]
+    ) -> list[dict]:
+        """Compare cost/quality metrics at each degradation level.
+
+        Returns a list of dicts, one per observed degrade_level, with keys:
+        degrade_level, step_count, avg_cost_usd, avg_latency_ms, avg_tokens.
+        """
+        by_level: dict[int, list[StepRecord]] = {}
+        for rec in step_records:
+            level = rec.decision.degrade_level
+            by_level.setdefault(level, []).append(rec)
+
+        results = []
+        for level in sorted(by_level):
+            records = by_level[level]
+            n = len(records)
+            total_cost = 0.0
+            total_latency = 0.0
+            total_tokens = 0
+            for rec in records:
+                if rec.actual is not None:
+                    total_cost += rec.actual.cost_usd
+                    total_latency += rec.actual.latency_ms
+                    total_tokens += rec.actual.prompt_tokens + rec.actual.completion_tokens
+            results.append({
+                "degrade_level": level,
+                "step_count": n,
+                "avg_cost_usd": total_cost / n if n > 0 else 0.0,
+                "avg_latency_ms": total_latency / n if n > 0 else 0.0,
+                "avg_tokens": total_tokens / n if n > 0 else 0.0,
+            })
+        return results
+
     def full_report(self, run_ids: list[str], budget_caps: dict[str, float] | None = None) -> FullReport:
         """Generate a comprehensive report for the given runs.
 
@@ -280,4 +329,6 @@ class Reporter:
             model_stats=self.model_stats(all_steps),
             prediction_accuracy=self.prediction_accuracy(all_steps),
             budget_compliance=self.budget_compliance(run_ids, budget_caps),
+            per_model_accuracy=self.per_model_accuracy(all_steps),
+            degradation_impact=self.degradation_impact(all_steps),
         )

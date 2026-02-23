@@ -31,6 +31,16 @@ class BudgetAccount:
     limit_tokens_per_day: int | None = None
     limit_runs_per_day: int | None = None
 
+    def __post_init__(self) -> None:
+        if not self.scope_id:
+            raise ValueError("BudgetAccount.scope_id must be non-empty")
+        if self.limit_usd_per_day is not None and self.limit_usd_per_day <= 0:
+            raise ValueError("BudgetAccount.limit_usd_per_day must be positive")
+        if self.limit_tokens_per_day is not None and self.limit_tokens_per_day <= 0:
+            raise ValueError("BudgetAccount.limit_tokens_per_day must be positive")
+        if self.limit_runs_per_day is not None and self.limit_runs_per_day <= 0:
+            raise ValueError("BudgetAccount.limit_runs_per_day must be positive")
+
 
 @dataclass
 class RunBudget:
@@ -42,6 +52,16 @@ class RunBudget:
     hard_latency_cap_ms: float | None = None
     max_tool_calls: int | None = None
 
+    def __post_init__(self) -> None:
+        if self.hard_usd_cap is not None and self.hard_usd_cap <= 0:
+            raise ValueError("RunBudget.hard_usd_cap must be positive")
+        if self.hard_token_cap is not None and self.hard_token_cap <= 0:
+            raise ValueError("RunBudget.hard_token_cap must be positive")
+        if self.hard_latency_cap_ms is not None and self.hard_latency_cap_ms <= 0:
+            raise ValueError("RunBudget.hard_latency_cap_ms must be positive")
+        if self.max_tool_calls is not None and self.max_tool_calls <= 0:
+            raise ValueError("RunBudget.max_tool_calls must be positive")
+
 
 @dataclass
 class ModelTier:
@@ -52,6 +72,16 @@ class ModelTier:
     cost_per_completion_token: float
     max_context_window: int
     tier: str = "standard"
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("ModelTier.name must be non-empty")
+        if self.cost_per_prompt_token < 0:
+            raise ValueError("ModelTier.cost_per_prompt_token must be >= 0")
+        if self.cost_per_completion_token < 0:
+            raise ValueError("ModelTier.cost_per_completion_token must be >= 0")
+        if self.max_context_window <= 0:
+            raise ValueError("ModelTier.max_context_window must be > 0")
 
 
 @dataclass

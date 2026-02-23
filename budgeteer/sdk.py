@@ -9,12 +9,26 @@ context management -> LLM call -> tool execution -> metrics -> telemetry.
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from typing import Any, Callable
 
 from budgeteer.calibrator import Calibrator
 from budgeteer.config import BudgeteerConfig
+from budgeteer.events import (
+    BUDGET_EXCEEDED,
+    BUDGET_WARNING,
+    FALLBACK_TRIGGERED,
+    RETRY_ATTEMPT,
+    ROI_GATE_BLOCKED,
+    RUN_ENDED,
+    RUN_STARTED,
+    STEP_COMPLETED,
+    STEP_DECIDED,
+    BudgeteerEvent,
+    EventHook,
+)
 from budgeteer.context_manager import ContextManager
 from budgeteer.exceptions import RetryExhaustedError
 from budgeteer.llm_client import LLMClient
@@ -67,11 +81,20 @@ class Budgeteer:
         tool_executor: ToolExecutor | None = None,
         summarize_fn: Callable[[list[dict[str, Any]]], str] | None = None,
     ):
+        self._logger = logging.getLogger("budgeteer")
+        self._hooks: list[EventHook] = []
         self._config = config or BudgeteerConfig()
+        if config is not None:
+            config.validate()
         self._telemetry = TelemetryStore(self._config.storage_path)
+        if self._config.retention_days is not None:
+            cutoff = time.time() - self._config.retention_days * 86400
+            self._telemetry.purge_before(cutoff)
         self._calibrator: Calibrator | None = None
         if self._config.calibration_enabled:
             self._calibrator = Calibrator(alpha=self._config.calibration_alpha)
+            if self._config.calibration_state_path:
+                self._calibrator.load(self._config.calibration_state_path)
         self._policy = PolicyEngine(self._config, self._telemetry, calibrator=self._calibrator)
         self._active_runs: dict[str, RunRecord] = {}
         self._run_budgets: dict[str, RunBudget] = {}
@@ -95,6 +118,22 @@ class Budgeteer:
                 budget_floor=self._config.roi_budget_floor,
                 clarify_ambiguity_threshold=self._config.roi_clarify_ambiguity_threshold,
             )
+
+    def add_hook(self, hook: EventHook) -> None:
+        """Register an event hook."""
+        self._hooks.append(hook)
+
+    def remove_hook(self, hook: EventHook) -> None:
+        """Remove a previously registered event hook."""
+        self._hooks.remove(hook)
+
+    def _emit(self, event: BudgeteerEvent) -> None:
+        """Emit an event to all registered hooks."""
+        for hook in self._hooks:
+            try:
+                hook(event)
+            except Exception:
+                self._logger.exception("Event hook raised an exception")
 
     def start_run(
         self,
@@ -128,6 +167,17 @@ class Budgeteer:
             )
 
         self._telemetry.log_run(record)
+
+        self._logger.info("Run started: %s (budget: usd=%s, tokens=%s)",
+                          run_id,
+                          run_budget.hard_usd_cap if run_budget else None,
+                          run_budget.hard_token_cap if run_budget else None)
+        self._emit(BudgeteerEvent(
+            event_type=RUN_STARTED,
+            run_id=run_id,
+            data={"hard_usd_cap": run_budget.hard_usd_cap if run_budget else None,
+                  "hard_token_cap": run_budget.hard_token_cap if run_budget else None},
+        ))
         return record
 
     def before_step(self, context: StepContext) -> StepDecision:
@@ -155,6 +205,25 @@ class Budgeteer:
         prediction = self._policy.last_prediction
         if prediction is not None:
             self._pending_predictions[context.step_id] = prediction
+
+        self._logger.debug("Step decided: model=%s, degrade_level=%d, max_tokens=%d",
+                           decision.model, decision.degrade_level, decision.max_tokens)
+        self._emit(BudgeteerEvent(
+            event_type=STEP_DECIDED,
+            run_id=context.run_id,
+            data={"model": decision.model, "degrade_level": decision.degrade_level,
+                  "max_tokens": decision.max_tokens, "step_id": context.step_id},
+        ))
+
+        if decision.degrade_level > 0:
+            self._logger.warning("Degradation active: level=%d, reason=%s",
+                                 decision.degrade_level, decision.degrade_reason)
+            self._emit(BudgeteerEvent(
+                event_type=BUDGET_WARNING,
+                run_id=context.run_id,
+                data={"degrade_level": decision.degrade_level,
+                      "reason": decision.degrade_reason},
+            ))
 
         return decision
 
@@ -190,6 +259,18 @@ class Budgeteer:
             run.total_latency_ms += metrics.latency_ms
             run.total_steps += 1
             run.total_tool_calls += metrics.tool_calls_made
+
+        self._logger.info("Step completed: cost=$%.4f, tokens=%d, latency=%.1fms",
+                          metrics.cost_usd,
+                          metrics.prompt_tokens + metrics.completion_tokens,
+                          metrics.latency_ms)
+        self._emit(BudgeteerEvent(
+            event_type=STEP_COMPLETED,
+            run_id=context.run_id,
+            data={"step_id": context.step_id, "cost_usd": metrics.cost_usd,
+                  "tokens": metrics.prompt_tokens + metrics.completion_tokens,
+                  "latency_ms": metrics.latency_ms},
+        ))
 
         # Update daily budget ledger
         account = (
@@ -229,6 +310,8 @@ class Budgeteer:
                 "execute_step() requires an llm_client. "
                 "Pass llm_client to the Budgeteer constructor."
             )
+        if not messages:
+            raise ValueError("messages must be a non-empty list")
 
         # 1. Build context and get decision
         ctx = StepContext(
@@ -362,6 +445,9 @@ class Budgeteer:
         # 7. Call after_step
         self.after_step(ctx, decision, metrics)
 
+        self._logger.info("execute_step complete: model=%s, cost=$%.4f, tools=%d",
+                          decision.model, metrics.cost_usd, len(tool_results))
+
         return StepResult(
             decision=decision,
             llm_response=llm_response,
@@ -402,7 +488,13 @@ class Budgeteer:
         last_error: Exception | None = None
         total_attempts = 0
 
-        for model in models_to_try:
+        for model_idx, model in enumerate(models_to_try):
+            if model_idx > 0:
+                self._logger.info("Falling back to model: %s", model)
+                self._emit(BudgeteerEvent(
+                    event_type=FALLBACK_TRIGGERED,
+                    data={"model": model, "previous_model": models_to_try[model_idx - 1]},
+                ))
             for attempt in range(max_retries + 1):
                 total_attempts += 1
                 models_tried.append(model)
@@ -415,8 +507,16 @@ class Budgeteer:
                     )
                 except Exception as exc:
                     last_error = exc
-                    if attempt < max_retries and delay_s > 0:
-                        time.sleep(delay_s)
+                    if attempt < max_retries:
+                        self._logger.warning("Retry attempt %d/%d for model %s: %s",
+                                             attempt + 1, max_retries, model, exc)
+                        self._emit(BudgeteerEvent(
+                            event_type=RETRY_ATTEMPT,
+                            data={"model": model, "attempt": attempt + 1,
+                                  "max_retries": max_retries, "error": str(exc)},
+                        ))
+                        if delay_s > 0:
+                            time.sleep(delay_s)
 
             # If no retries configured, don't try fallbacks
             if max_retries == 0:
@@ -501,6 +601,15 @@ class Budgeteer:
         self._telemetry.update_run(record)
         self._run_budgets.pop(run_id, None)
         self._run_accounts.pop(run_id, None)
+
+        self._logger.info("Run ended: %s (success=%s, cost=$%.4f, steps=%d)",
+                          run_id, success, record.total_cost_usd, record.total_steps)
+        self._emit(BudgeteerEvent(
+            event_type=RUN_ENDED,
+            run_id=run_id,
+            data={"success": success, "total_cost_usd": record.total_cost_usd,
+                  "total_steps": record.total_steps},
+        ))
         return record
 
     @property
@@ -549,5 +658,7 @@ class Budgeteer:
         self.close()
 
     def close(self) -> None:
-        """Close the telemetry store connection."""
+        """Close resources: save calibrator state and close telemetry."""
+        if self._calibrator is not None and self._config.calibration_state_path:
+            self._calibrator.save(self._config.calibration_state_path)
         self._telemetry.close()

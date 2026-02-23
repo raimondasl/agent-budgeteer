@@ -115,6 +115,33 @@ class StrategyRouter:
             config.model_tiers,
             key=lambda t: t.cost_per_prompt_token + t.cost_per_completion_token,
         )
+        # Use custom degradation ladder if provided
+        if config.degrade_ladder is not None:
+            self._degrade_ladder = self._parse_ladder(config.degrade_ladder)
+        else:
+            self._degrade_ladder = DEFAULT_DEGRADE_LADDER
+
+    @staticmethod
+    def _parse_ladder(ladder_dicts: list[dict]) -> list[DegradeLevelParams]:
+        """Parse and validate a custom degradation ladder from config dicts."""
+        if not ladder_dicts:
+            raise ValueError("degrade_ladder must have at least 1 level")
+        result = []
+        for i, d in enumerate(ladder_dicts):
+            mtr = d.get("max_tokens_ratio", 1.0)
+            quality = d.get("quality", 1.0)
+            if not (0 <= mtr <= 1):
+                raise ValueError(f"degrade_ladder[{i}]: max_tokens_ratio must be in [0, 1], got {mtr}")
+            if not (0 <= quality <= 1):
+                raise ValueError(f"degrade_ladder[{i}]: quality must be in [0, 1], got {quality}")
+            result.append(DegradeLevelParams(
+                max_tokens_ratio=mtr,
+                tool_calls=int(d.get("tool_calls", 5)),
+                retrieval=bool(d.get("retrieval", True)),
+                retrieval_top_k=int(d.get("retrieval_top_k", 3)),
+                quality=quality,
+            ))
+        return result
 
     def set_calibrator(self, calibrator: "Calibrator | None") -> None:
         """Set or replace the calibrator used for forecast correction."""
@@ -147,7 +174,7 @@ class StrategyRouter:
                 (0.6 + 0.4 * tier_idx / max(1, n - 1)) if n > 1 else 1.0
             )
 
-            for level, params in enumerate(DEFAULT_DEGRADE_LADDER):
+            for level, params in enumerate(self._degrade_ladder):
                 max_tokens = max(
                     1,
                     int(self._config.default_max_tokens * params.max_tokens_ratio),
